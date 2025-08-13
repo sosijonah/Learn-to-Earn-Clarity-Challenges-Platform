@@ -10,6 +10,7 @@
 (define-data-var total-challenges uint u0)
 (define-data-var total-submissions uint u0)
 (define-data-var platform-fee uint u1000) ;; 10% in basis points
+(define-data-var leaderboard-size uint u0)
 
 (define-map challenges
     uint 
@@ -47,6 +48,16 @@
 (define-map challenge-reviewers
     principal 
     bool
+)
+
+(define-map leaderboard-by-rewards
+    uint
+    principal
+)
+
+(define-map leaderboard-by-challenges
+    uint
+    principal
 )
 
 (define-public (initialize-contract)
@@ -131,6 +142,10 @@
                         reputation-score: (+ (get reputation-score user-profile) (get difficulty challenge))
                     })
                 )
+                (update-leaderboards submitter 
+                    (+ (get total-rewards user-profile) (get reward challenge))
+                    (+ (get challenges-completed user-profile) u1)
+                )
                 (map-set challenge-submissions submission-key
                     (merge submission {
                         status: "approved",
@@ -178,6 +193,43 @@
 (define-read-only (get-platform-stats)
     (ok {
         total-challenges: (var-get total-challenges),
-        total-submissions: (var-get total-submissions)
+        total-submissions: (var-get total-submissions),
+        leaderboard-size: (var-get leaderboard-size)
     })
+)
+
+(define-private (update-leaderboards (user principal) (total-rewards uint) (challenges-completed uint))
+    (let (
+        (current-size (var-get leaderboard-size))
+    )
+        (map-set leaderboard-by-rewards current-size user)
+        (map-set leaderboard-by-challenges current-size user)
+        (var-set leaderboard-size (+ current-size u1))
+        true
+    )
+)
+
+(define-read-only (get-top-earners (start uint) (limit uint))
+    (let (
+        (end (+ start limit))
+        (max-size (var-get leaderboard-size))
+    )
+        (ok (fold get-leaderboard-entry (list start) (list)))
+    )
+)
+
+(define-read-only (get-top-solvers (start uint) (limit uint))
+    (let (
+        (end (+ start limit))
+        (max-size (var-get leaderboard-size))
+    )
+        (ok (fold get-leaderboard-entry (list start) (list)))
+    )
+)
+
+(define-private (get-leaderboard-entry (index uint) (acc (list 50 principal)))
+    (match (map-get? leaderboard-by-rewards index)
+        user (unwrap-panic (as-max-len? (append acc user) u50))
+        acc
+    )
 )
