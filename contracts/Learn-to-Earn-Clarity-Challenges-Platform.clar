@@ -8,6 +8,7 @@
 (define-constant ERR-INSUFFICIENT-REPUTATION (err u107))
 (define-constant ERR-HINT-NOT-FOUND (err u108))
 (define-constant ERR-MAX-HINTS-REACHED (err u109))
+(define-constant ERR-ZERO-AMOUNT (err u110))
 
 (define-data-var contract-owner principal tx-sender)
 (define-data-var total-challenges uint u0)
@@ -80,6 +81,19 @@
     }
 )
 
+(define-map challenge-bounty-boosts
+    uint
+    {
+        total-boost: uint,
+        contributors-count: uint
+    }
+)
+
+(define-map user-bounty-contributions
+    { challenge-id: uint, contributor: principal }
+    uint
+)
+
 (define-public (initialize-contract)
     (begin
         (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
@@ -149,21 +163,26 @@
             { challenges-completed: u0, total-rewards: u0, reputation-score: u0, is-reviewer: false }
             (map-get? user-profiles submitter)
         ))
+        (bounty-boost (default-to 
+            { total-boost: u0, contributors-count: u0 }
+            (map-get? challenge-bounty-boosts challenge-id)
+        ))
+        (total-reward (+ (get reward challenge) (get total-boost bounty-boost)))
     )
         (asserts! (is-some (map-get? challenge-reviewers tx-sender)) ERR-NOT-REVIEWER)
         
         (if approved
             (begin
-                (try! (as-contract (stx-transfer? (get reward challenge) tx-sender submitter)))
+                (try! (as-contract (stx-transfer? total-reward tx-sender submitter)))
                 (map-set user-profiles submitter 
                     (merge user-profile {
                         challenges-completed: (+ (get challenges-completed user-profile) u1),
-                        total-rewards: (+ (get total-rewards user-profile) (get reward challenge)),
+                        total-rewards: (+ (get total-rewards user-profile) total-reward),
                         reputation-score: (+ (get reputation-score user-profile) (get difficulty challenge))
                     })
                 )
                 (update-leaderboards submitter 
-                    (+ (get total-rewards user-profile) (get reward challenge))
+                    (+ (get total-rewards user-profile) total-reward)
                     (+ (get challenges-completed user-profile) u1)
                 )
                 (map-set challenge-submissions submission-key
@@ -248,6 +267,38 @@
     )
 )
 
+(define-public (boost-challenge-bounty (challenge-id uint) (boost-amount uint))
+    (let (
+        (challenge (unwrap! (map-get? challenges challenge-id) ERR-CHALLENGE-NOT-FOUND))
+        (current-boost (default-to 
+            { total-boost: u0, contributors-count: u0 }
+            (map-get? challenge-bounty-boosts challenge-id)
+        ))
+        (contribution-key { challenge-id: challenge-id, contributor: tx-sender })
+        (previous-contribution (default-to u0 (map-get? user-bounty-contributions contribution-key)))
+    )
+        (asserts! (get active challenge) ERR-CHALLENGE-NOT-FOUND)
+        (asserts! (> boost-amount u0) ERR-ZERO-AMOUNT)
+        (asserts! (>= (stx-get-balance tx-sender) boost-amount) ERR-INSUFFICIENT-FUNDS)
+        
+        (try! (stx-transfer? boost-amount tx-sender (as-contract tx-sender)))
+        
+        (map-set challenge-bounty-boosts challenge-id {
+            total-boost: (+ (get total-boost current-boost) boost-amount),
+            contributors-count: (if (is-eq previous-contribution u0)
+                (+ (get contributors-count current-boost) u1)
+                (get contributors-count current-boost)
+            )
+        })
+        
+        (map-set user-bounty-contributions contribution-key 
+            (+ previous-contribution boost-amount)
+        )
+        
+        (ok true)
+    )
+)
+
 (define-read-only (get-challenge (challenge-id uint))
     (ok (map-get? challenges challenge-id))
 )
@@ -284,6 +335,26 @@
         ))
     )
         (ok (+ (get hints-purchased user-purchases) u1))
+    )
+)
+
+(define-read-only (get-challenge-bounty-boost (challenge-id uint))
+    (ok (map-get? challenge-bounty-boosts challenge-id))
+)
+
+(define-read-only (get-user-bounty-contribution (challenge-id uint) (contributor principal))
+    (ok (map-get? user-bounty-contributions { challenge-id: challenge-id, contributor: contributor }))
+)
+
+(define-read-only (get-total-challenge-reward (challenge-id uint))
+    (let (
+        (challenge (unwrap! (map-get? challenges challenge-id) ERR-CHALLENGE-NOT-FOUND))
+        (bounty-boost (default-to 
+            { total-boost: u0, contributors-count: u0 }
+            (map-get? challenge-bounty-boosts challenge-id)
+        ))
+    )
+        (ok (+ (get reward challenge) (get total-boost bounty-boost)))
     )
 )
 
